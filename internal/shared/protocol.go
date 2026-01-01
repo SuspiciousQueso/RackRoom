@@ -1,5 +1,7 @@
 package shared
 
+import "encoding/json"
+
 type EnrollRequest struct {
 	EnrollToken string    `json:"enroll_token"`
 	PublicKey   string    `json:"public_key"` // base64
@@ -17,13 +19,6 @@ type AgentInfo struct {
 	Hostname string `json:"hostname"`
 	OS       string `json:"os"`
 	Arch     string `json:"arch"`
-}
-
-type HeartbeatRequest struct {
-	AgentID   string         `json:"agent_id"`
-	Info      AgentInfo      `json:"info"`
-	Inventory map[string]any `json:"inventory,omitempty"`
-	Tags      []string       `json:"tags,omitempty"`
 }
 
 type HeartbeatResponse struct {
@@ -59,4 +54,13 @@ type SubmitJobRequest struct {
 	Shell          string `json:"shell"`
 	Command        string `json:"command"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+
+type HeartbeatRequest struct {
+	AgentID string    `json:"agent_id"`
+	Info    AgentInfo `json:"info"`
+	Tags    []string  `json:"tags,omitempty"`
+
+	// Inventory snapshot JSON (v0). Send occasionally.
+	Inventory json.RawMessage `json:"inventory,omitempty"`
 }

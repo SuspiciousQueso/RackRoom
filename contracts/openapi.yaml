@@ -1,0 +1,49 @@
+﻿openapi: 3.0.3
+info:
+  title: RackRoom API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8085
+paths:
+  /v1/enroll:
+    post:
+      summary: Enroll an agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: OK
+  /v1/heartbeat:
+    post:
+      summary: Agent heartbeat (signed)
+      responses:
+        "200":
+          description: OK
+  /v1/jobs/poll:
+    get:
+      summary: Poll for jobs
+      parameters:
+        - in: query
+          name: agent_id
+          schema:
+            type: string
+          required: true
+      responses:
+        "200":
+          description: OK
+  /v1/jobs/submit:
+    post:
+      summary: Submit a job (admin/dev)
+      responses:
+        "200":
+          description: OK
+  /v1/job_result:
+    post:
+      summary: Post a job result (signed)
+      responses:
+        "200":
+          description: OK

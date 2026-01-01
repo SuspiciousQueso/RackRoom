@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -12,8 +13,16 @@ import (
 	"github.com/google/uuid"
 )
 
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
 type API struct {
-	Store *Store
+	Store       Store
+	EnrollToken string
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -44,20 +53,16 @@ func (a *API) Enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.EnrollToken == "" || req.EnrollToken != a.Store.EnrollToken {
+	if req.EnrollToken == "" || req.EnrollToken != a.EnrollToken {
 		writeJSON(w, 401, map[string]any{"error": "invalid enroll token"})
 		return
 	}
 
-	agentID := uuid.NewString()
-	rec := &AgentRecord{
-		AgentID:   agentID,
-		PublicKey: req.PublicKey,
-		Info:      req.Info,
-		Tags:      req.Tags,
-		LastSeen:  time.Now(),
+	agentID, err := a.Store.CreateAgent(req.PublicKey, req.Info, req.Tags)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
 	}
-	a.Store.UpsertAgent(rec)
 
 	writeJSON(w, 200, shared.EnrollResponse{
 		AgentID:    agentID,
@@ -70,27 +75,53 @@ func (a *API) Enroll(w http.ResponseWriter, r *http.Request) {
 func (a *API) RequireAgentAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		agentID := r.Header.Get("X-Agent-Id")
+		pubKeyB64 := r.Header.Get("X-PubKey")
 		ts := r.Header.Get("X-Timestamp")
 		sig := r.Header.Get("X-Signature")
 		bodySha := r.Header.Get("X-Body-Sha256")
 
-		if agentID == "" || ts == "" || sig == "" || bodySha == "" {
+		log.Printf("auth: path=%s agent_id=%q pubkey_prefix=%q", r.URL.Path, agentID, firstN(pubKeyB64, 16))
+
+		if ts == "" || sig == "" || bodySha == "" {
 			writeJSON(w, 401, map[string]any{"error": "missing auth headers"})
 			return
 		}
 
-		rec, ok := a.Store.GetAgent(agentID)
-		if !ok {
-			writeJSON(w, 401, map[string]any{"error": "unknown agent"})
-			return
-		}
-
-		// Basic timestamp sanity window (10 min)
-		// (keep it simple; if clock skew becomes annoying, widen it)
+		// Timestamp sanity window (10 min)
 		tInt, _ := parseInt64(ts)
 		now := time.Now().Unix()
 		if tInt == 0 || tInt < now-600 || tInt > now+600 {
 			writeJSON(w, 401, map[string]any{"error": "timestamp outside window"})
+			return
+		}
+
+		// Find agent record by agent_id, else fall back to pubkey (Option C)
+		var rec *AgentRecord
+		var err error
+
+		if agentID != "" {
+			rec, err = a.Store.GetAgentByID(agentID)
+			if err != nil {
+				writeJSON(w, 500, map[string]any{"error": "db error"})
+				return
+			}
+		}
+
+		if rec == nil && pubKeyB64 != "" {
+			rec, err = a.Store.GetAgentByPubKey(pubKeyB64)
+			if err != nil {
+				writeJSON(w, 500, map[string]any{"error": "db error"})
+				return
+			}
+			if rec != nil {
+				// Tell the handler (and optionally the agent) what the canonical agent_id is
+				r.Header.Set("X-Canonical-Agent-Id", rec.AgentID)
+				w.Header().Set("X-Canonical-Agent-Id", rec.AgentID)
+			}
+		}
+
+		if rec == nil {
+			writeJSON(w, 401, map[string]any{"error": "unknown agent"})
 			return
 		}
 
@@ -100,9 +131,7 @@ func (a *API) RequireAgentAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		path := r.URL.Path
-		method := r.Method
-		if !shared.Verify(pub, sig, ts, method, path, bodySha) {
+		if !shared.Verify(pub, sig, ts, r.Method, r.URL.Path, bodySha) {
 			writeJSON(w, 401, map[string]any{"error": "bad signature"})
 			return
 		}
@@ -128,15 +157,24 @@ func (a *API) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rec, ok := a.Store.GetAgent(hb.AgentID)
-	if ok {
-		rec.Info = hb.Info
-		rec.Tags = hb.Tags
-		rec.LastSeen = time.Now()
-		a.Store.UpsertAgent(rec)
+	// If middleware re-associated the agent via pubkey (Option C),
+	// use the canonical agent ID
+	if canon := r.Header.Get("X-Canonical-Agent-Id"); canon != "" {
+		hb.AgentID = canon
 	}
 
-	writeJSON(w, 200, shared.HeartbeatResponse{Ok: true, ServerTime: time.Now().Unix()})
+	if err := a.Store.UpdateAgentSeen(hb.AgentID, hb.Info, hb.Tags); err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+	if len(hb.Inventory) > 0 {
+		_ = a.Store.AddInventorySnapshot(hb.AgentID, string(hb.Inventory))
+	}
+
+	writeJSON(w, 200, shared.HeartbeatResponse{
+		Ok:         true,
+		ServerTime: time.Now().Unix(),
+	})
 }
 
 func (a *API) PollJobs(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +187,13 @@ func (a *API) PollJobs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "missing agent_id"})
 		return
 	}
-	jobs := a.Store.DequeueJobs(agentID, 5)
+
+	jobs, err := a.Store.DequeueJobs(agentID, 5)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+
 	writeJSON(w, 200, shared.JobsPollResponse{Jobs: jobs})
 }
 
@@ -168,7 +212,17 @@ func (a *API) JobResult(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "bad json"})
 		return
 	}
-	a.Store.AddResult(res)
+
+	// If middleware rebounded, use canonical agent id
+	if canon := r.Header.Get("X-Canonical-Agent-Id"); canon != "" {
+		res.AgentID = canon
+	}
+
+	if err := a.Store.AddResult(res); err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 
@@ -192,6 +246,7 @@ func (a *API) SubmitJob(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]any{"error": "missing target_agent_id"})
 		return
 	}
+
 	job := shared.Job{
 		JobID:          uuid.NewString(),
 		Kind:           req.Kind,
@@ -205,7 +260,12 @@ func (a *API) SubmitJob(w http.ResponseWriter, r *http.Request) {
 	if job.TimeoutSeconds <= 0 {
 		job.TimeoutSeconds = 30
 	}
-	a.Store.QueueJob(req.TargetAgentID, job)
+
+	if err := a.Store.QueueJob(req.TargetAgentID, job); err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+
 	writeJSON(w, 200, map[string]any{"ok": true, "job_id": job.JobID})
 }
 

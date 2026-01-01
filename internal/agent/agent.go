@@ -148,6 +148,9 @@ func (a *Agent) signedRequest(ctx context.Context, method, path string, body []b
 		return nil, err
 	}
 
+	pub := a.Priv.Public().(ed25519.PublicKey)
+	req.Header.Set("X-PubKey", base64.StdEncoding.EncodeToString(pub))
+
 	ts := time.Now().Unix()
 	tsStr := itoa(ts)
 
