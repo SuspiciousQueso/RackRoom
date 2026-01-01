@@ -1,0 +1,10 @@
+{
+  "server_url": "http://localhost:8080",
+    "enroll_token": "ENROLL-DEV-CHANGE-ME",
+      "agent_id": "",
+        "private_key_path": "",
+          "heartbeat_seconds": 10,
+            "poll_seconds": 3,
+              "inventory_seconds": 3600,
+                "tags": ["lab","dev"]
+                }
