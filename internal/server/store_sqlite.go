@@ -184,3 +184,184 @@ func (s *SQLiteStore) GetLatestInventorySnapshot(agentID string) (string, error)
 	}
 	return payload, nil
 }
+
+func (s *SQLiteStore) ListAgents(limit int) ([]AgentRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.DB.Query(
+		`SELECT id, public_key, hostname, os, arch, tags_json, last_seen
+		 FROM agents
+		 ORDER BY last_seen DESC
+		 LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentRecord
+	for rows.Next() {
+		var rec AgentRecord
+		var tagsJSON string
+		if err := rows.Scan(&rec.AgentID, &rec.PublicKey, &rec.Info.Hostname, &rec.Info.OS, &rec.Info.Arch, &tagsJSON, &rec.LastSeen); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(tagsJSON), &rec.Tags)
+		out = append(out, rec)
+	}
+	return out, nil
+}
+
+func (s *SQLiteStore) UpsertAgentFacts(f AgentFacts) error {
+	_, err := s.DB.Exec(
+		`INSERT INTO agent_facts (
+			agent_id, updated_at,
+			os_caption, os_version, os_build,
+			cpu_name, cpu_cores, cpu_logical,
+			ram_total_bytes, ram_free_bytes,
+			uptime_seconds, ipv4_primary,
+			disk_total_bytes, disk_free_bytes
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			updated_at=excluded.updated_at,
+			os_caption=excluded.os_caption,
+			os_version=excluded.os_version,
+			os_build=excluded.os_build,
+			cpu_name=excluded.cpu_name,
+			cpu_cores=excluded.cpu_cores,
+			cpu_logical=excluded.cpu_logical,
+			ram_total_bytes=excluded.ram_total_bytes,
+			ram_free_bytes=excluded.ram_free_bytes,
+			uptime_seconds=excluded.uptime_seconds,
+			ipv4_primary=excluded.ipv4_primary,
+			disk_total_bytes=excluded.disk_total_bytes,
+			disk_free_bytes=excluded.disk_free_bytes
+		`,
+		f.AgentID, f.UpdatedAt,
+		f.OSCaption, f.OSVersion, f.OSBuild,
+		f.CPUName, f.CPUCores, f.CPULogical,
+		f.RAMTotalBytes, f.RAMFreeBytes,
+		f.UptimeSeconds, f.IPv4Primary,
+		f.DiskTotalBytes, f.DiskFreeBytes,
+	)
+	return err
+}
+func (s *SQLiteStore) ListAgentFacts(limit int) ([]AgentFacts, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+
+	rows, err := s.DB.Query(
+		`SELECT agent_id, updated_at,
+		        os_caption, os_version, os_build,
+		        cpu_name, cpu_cores, cpu_logical,
+		        ram_total_bytes, ram_free_bytes,
+		        uptime_seconds, ipv4_primary,
+		        disk_total_bytes, disk_free_bytes
+		   FROM agent_facts
+		   ORDER BY updated_at DESC
+		   LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentFacts
+	for rows.Next() {
+		var f AgentFacts
+		if err := rows.Scan(
+			&f.AgentID, &f.UpdatedAt,
+			&f.OSCaption, &f.OSVersion, &f.OSBuild,
+			&f.CPUName, &f.CPUCores, &f.CPULogical,
+			&f.RAMTotalBytes, &f.RAMFreeBytes,
+			&f.UptimeSeconds, &f.IPv4Primary,
+			&f.DiskTotalBytes, &f.DiskFreeBytes,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+
+	return out, nil
+}
+
+func (s *SQLiteStore) ListAgentFactsView(limit int) ([]AgentFactsView, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+
+	rows, err := s.DB.Query(
+		`SELECT
+			a.id,
+			a.hostname,
+			a.tags_json,
+			a.last_seen,
+
+			COALESCE(f.os_caption, ''),
+			COALESCE(f.os_version, ''),
+			COALESCE(f.os_build, ''),
+
+			COALESCE(f.cpu_name, ''),
+			COALESCE(f.cpu_cores, 0),
+			COALESCE(f.cpu_logical, 0),
+
+			COALESCE(f.ram_total_bytes, 0),
+			COALESCE(f.ram_free_bytes, 0),
+
+			COALESCE(f.uptime_seconds, 0),
+			COALESCE(f.ipv4_primary, ''),
+
+			COALESCE(f.disk_total_bytes, 0),
+			COALESCE(f.disk_free_bytes, 0),
+
+			COALESCE(f.updated_at, 0)
+		FROM agents a
+		LEFT JOIN agent_facts f ON f.agent_id = a.id
+		ORDER BY a.last_seen DESC
+		LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []AgentFactsView
+	for rows.Next() {
+		var v AgentFactsView
+		var tagsJSON string
+		if err := rows.Scan(
+			&v.AgentID,
+			&v.Hostname,
+			&tagsJSON,
+			&v.LastSeen,
+
+			&v.OSCaption,
+			&v.OSVersion,
+			&v.OSBuild,
+
+			&v.CPUName,
+			&v.CPUCores,
+			&v.CPULogical,
+
+			&v.RAMTotalBytes,
+			&v.RAMFreeBytes,
+
+			&v.UptimeSeconds,
+			&v.IPv4Primary,
+
+			&v.DiskTotalBytes,
+			&v.DiskFreeBytes,
+
+			&v.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		_ = json.Unmarshal([]byte(tagsJSON), &v.Tags)
+		out = append(out, v)
+	}
+
+	return out, nil
+}

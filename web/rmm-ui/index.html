@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>RackRoom RMM UI (v0)</title>
+    <style>
+        body { font-family: system-ui, sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; font-size: 14px; }
+        th { background: #f4f4f4; text-align: left; }
+        tr:hover { background: #fafafa; cursor: pointer; }
+        pre { background: #111; color: #eee; padding: 12px; overflow: auto; border-radius: 6px; }
+        .grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+        @media (min-width: 1100px) { .grid { grid-template-columns: 1.2fr 1fr; } }
+    </style>
+</head>
+<body>
+<h1>RackRoom (v0)</h1>
+<p>Agents + Facts + Latest Inventory</p>
+
+<div class="grid">
+    <div>
+        <button id="refresh">Refresh</button>
+        <table id="agents">
+            <thead>
+            <tr>
+                <th>Hostname</th>
+                <th>OS</th>
+                <th>Build</th>
+                <th>CPU</th>
+                <th>RAM (GB)</th>
+                <th>Disk Free (GB)</th>
+                <th>IPv4</th>
+                <th>Last Seen</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div>
+        <h3>Selected Agent Inventory</h3>
+        <div id="selected"></div>
+        <pre id="inventory">{ select an agent }</pre>
+    </div>
+</div>
+
+<script>
+    const apiBase = ""; // same origin (served by rr-server)
+
+    function fmtGB(bytes) {
+        if (!bytes) return "";
+        return (bytes / (1024**3)).toFixed(1);
+    }
+    function fmtTime(unix) {
+        if (!unix) return "";
+        const d = new Date(unix * 1000);
+        return d.toLocaleString();
+    }
+
+    async function loadFacts() {
+        const res = await fetch(apiBase + "/v1/admin/agents/facts");
+        if (!res.ok) throw new Error("facts fetch failed: " + res.status);
+        const data = await res.json();
+        return data.facts || [];
+    }
+
+    async function loadAgents() {
+        const res = await fetch(apiBase + "/v1/admin/agents");
+        if (!res.ok) throw new Error("agents fetch failed: " + res.status);
+        const data = await res.json();
+        return data.agents || [];
+    }
+
+    async function loadInventory(agentId) {
+        const res = await fetch(apiBase + `/v1/admin/agents/${agentId}/inventory/latest`);
+        if (!res.ok) throw new Error("inventory fetch failed: " + res.status);
+        return await res.json();
+    }
+
+    function renderTable(rows) {
+        const tbody = document.querySelector("#agents tbody");
+        tbody.innerHTML = "";
+        rows.forEach(r => {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+      <td>${r.hostname || ""}</td>
+      <td>${r.os_caption || r.os || ""}</td>
+      <td>${r.os_build || ""}</td>
+      <td>${r.cpu_name ? r.cpu_name.slice(0, 35) : ""}</td>
+      <td>${fmtGB(r.ram_total_bytes)}</td>
+      <td>${fmtGB(r.disk_free_bytes)}</td>
+      <td>${r.ipv4_primary || ""}</td>
+      <td>${fmtTime(r.updated_at || r.last_seen)}</td>
+    `;
+            tr.addEventListener("click", async () => {
+                document.getElementById("selected").textContent = `${r.hostname} (${r.agent_id})`;
+                try {
+                    const inv = await loadInventory(r.agent_id);
+                    document.getElementById("inventory").textContent = JSON.stringify(inv, null, 2);
+                } catch (e) {
+                    document.getElementById("inventory").textContent = String(e);
+                }
+            });
+            tbody.appendChild(tr);
+        });
+    }
+
+    async function refresh() {
+        // Use facts table as our primary listing (richer than agents list)
+        const facts = await loadFacts();
+        // If facts empty, fall back to agents list
+        if (facts.length === 0) {
+            const agents = await loadAgents();
+            renderTable(agents);
+        } else {
+            renderTable(facts);
+        }
+    }
+
+    document.getElementById("refresh").addEventListener("click", () => refresh().catch(e => alert(e)));
+    refresh().catch(e => alert(e));
+</script>
+</body>
+</html>

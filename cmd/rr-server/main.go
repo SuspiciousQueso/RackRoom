@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -41,7 +42,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to open db %s: %v", dbPath, err)
 	}
-	defer db.Close()
+
+	if err := server.RunMigrations(db); err != nil {
+		log.Fatalf("migrations failed: %v", err)
+	}
 
 	store := server.NewSQLiteStore(db)
 
@@ -52,15 +56,34 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/enroll", api.Enroll)
-
+	// admin (v0 – no auth yet)
+	mux.HandleFunc("/v1/admin/agents", api.AdminListAgents)
+	mux.HandleFunc("/v1/admin/agents/facts", api.AdminAgentsFacts) // must be before prefix
+	mux.HandleFunc("/v1/admin/agents/", api.AdminLatestInventory)  // prefix last
+	mux.HandleFunc("/debug/sql", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", 405)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		if len(body) == 0 {
+			http.Error(w, "empty body", 400)
+			return
+		}
+		if _, err := db.Exec(string(body)); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte("ok"))
+	})
 	// Signed endpoints
 	mux.HandleFunc("/v1/heartbeat", api.RequireAgentAuth(api.Heartbeat))
 	mux.HandleFunc("/v1/job_result", api.RequireAgentAuth(api.JobResult))
-
 	// Polling + submit (v0)
 	mux.HandleFunc("/v1/jobs/poll", api.PollJobs)
 	mux.HandleFunc("/v1/jobs/submit", api.SubmitJob)
-
+	mux.Handle("/", http.FileServer(http.Dir("./web/rmm-ui")))
 	log.Printf("rr-server listening on %s", addr)
 	log.Printf("db: %s", dbPath)
 	log.Printf("enroll token: via RR_ENROLL_TOKEN")

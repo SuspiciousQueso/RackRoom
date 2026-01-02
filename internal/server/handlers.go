@@ -145,6 +145,7 @@ func (a *API) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 405, map[string]any{"error": "method not allowed"})
 		return
 	}
+
 	body, err := readBody(r)
 	if err != nil {
 		writeJSON(w, 400, map[string]any{"error": "bad body"})
@@ -169,6 +170,37 @@ func (a *API) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(hb.Inventory) > 0 {
 		_ = a.Store.AddInventorySnapshot(hb.AgentID, string(hb.Inventory))
+
+		// Facts extraction (v0)
+		var inv WinInventory
+		if err := json.Unmarshal(hb.Inventory, &inv); err == nil {
+			var diskTotal, diskFree int64
+			for _, d := range inv.Disks {
+				diskTotal += d.Size
+				diskFree += d.Free
+			}
+			ip := ""
+			if len(inv.IPv4) > 0 {
+				ip = inv.IPv4[0]
+			}
+
+			_ = a.Store.UpsertAgentFacts(AgentFacts{
+				AgentID:        hb.AgentID,
+				UpdatedAt:      time.Now().Unix(),
+				OSCaption:      inv.OS.Caption,
+				OSVersion:      inv.OS.Version,
+				OSBuild:        inv.OS.Build,
+				CPUName:        inv.CPU.Name,
+				CPUCores:       inv.CPU.Cores,
+				CPULogical:     inv.CPU.Logical,
+				RAMTotalBytes:  inv.Memory.TotalBytes,
+				RAMFreeBytes:   inv.Memory.FreeBytes,
+				UptimeSeconds:  inv.UptimeSeconds,
+				IPv4Primary:    ip,
+				DiskTotalBytes: diskTotal,
+				DiskFreeBytes:  diskFree,
+			})
+		}
 	}
 
 	writeJSON(w, 200, shared.HeartbeatResponse{
@@ -279,4 +311,95 @@ func parseInt64(s string) (int64, error) {
 		n = n*10 + int64(ch-'0')
 	}
 	return n, nil
+}
+func (a *API) AdminListAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, 405, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	agents, err := a.Store.ListAgents(200)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+
+	type row struct {
+		AgentID  string   `json:"agent_id"`
+		Hostname string   `json:"hostname"`
+		OS       string   `json:"os"`
+		Arch     string   `json:"arch"`
+		Tags     []string `json:"tags"`
+		LastSeen int64    `json:"last_seen"`
+	}
+
+	out := make([]row, 0, len(agents))
+	for _, a := range agents {
+		out = append(out, row{
+			AgentID:  a.AgentID,
+			Hostname: a.Info.Hostname,
+			OS:       a.Info.OS,
+			Arch:     a.Info.Arch,
+			Tags:     a.Tags,
+			LastSeen: a.LastSeen,
+		})
+	}
+
+	writeJSON(w, 200, map[string]any{"agents": out})
+}
+
+func (a *API) AdminLatestInventory(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, 405, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	// Expected:
+	// /v1/admin/agents/{agent_id}/inventory/latest
+	path := strings.TrimPrefix(r.URL.Path, "/v1/admin/agents/")
+	parts := strings.Split(path, "/")
+
+	if len(parts) != 3 || parts[1] != "inventory" || parts[2] != "latest" {
+		writeJSON(w, 400, map[string]any{
+			"error":    "invalid path",
+			"expected": "/v1/admin/agents/{agent_id}/inventory/latest",
+		})
+		return
+	}
+
+	agentID := parts[0]
+	if agentID == "" {
+		writeJSON(w, 400, map[string]any{"error": "missing agent_id"})
+		return
+	}
+
+	payload, err := a.Store.GetLatestInventorySnapshot(agentID)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+	if payload == "" {
+		writeJSON(w, 404, map[string]any{"error": "no inventory"})
+		return
+	}
+
+	// payload is already JSON — return it raw
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write([]byte(payload))
+}
+
+func (a *API) AdminAgentsFacts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, 405, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	facts, err := a.Store.ListAgentFacts(200)
+	if err != nil {
+		writeJSON(w, 500, map[string]any{"error": "db error"})
+		return
+	}
+
+	writeJSON(w, 200, map[string]any{"facts": facts})
 }

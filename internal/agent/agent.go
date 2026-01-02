@@ -23,6 +23,8 @@ type Agent struct {
 	Cfg        *shared.AgentConfig
 	Priv       ed25519.PrivateKey // ed25519 private key bytes
 	Client     *http.Client
+	invCache   []byte
+	lastInvAt  int64
 }
 
 func New(configPath string) (*Agent, error) {
@@ -187,6 +189,16 @@ func itoa(n int64) string {
 }
 
 func (a *Agent) SendHeartbeat(ctx context.Context) error {
+	now := time.Now().Unix()
+
+	// Refresh inventory every 10 minutes (600s)
+	if a.invCache == nil || now-a.lastInvAt >= 600 {
+		if inv, err := collectInventoryJSON(); err == nil && len(inv) > 0 {
+			a.invCache = inv
+			a.lastInvAt = now
+		}
+	}
+
 	hb := shared.HeartbeatRequest{
 		AgentID: a.Cfg.AgentID,
 		Info: shared.AgentInfo{
@@ -194,11 +206,10 @@ func (a *Agent) SendHeartbeat(ctx context.Context) error {
 			OS:       runtime.GOOS,
 			Arch:     runtime.GOARCH,
 		},
-		Tags: a.Cfg.Tags,
-		Inventory: map[string]any{
-			"uptime_seconds": 0, // TODO: implement per-OS later
-		},
+		Tags:      a.Cfg.Tags,
+		Inventory: a.invCache, // <-- []byte (json.RawMessage)
 	}
+
 	body, _ := json.Marshal(hb)
 
 	req, err := a.signedRequest(ctx, "POST", "/v1/heartbeat", body)
@@ -216,6 +227,7 @@ func (a *Agent) SendHeartbeat(ctx context.Context) error {
 		b, _ := io.ReadAll(resp.Body)
 		return errors.New("heartbeat failed: " + string(b))
 	}
+
 	return nil
 }
 

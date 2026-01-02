@@ -8,26 +8,25 @@ import (
 )
 
 //go:embed migrations/*.sql
-var migFS embed.FS
+var migrationsFS embed.FS
 
 func RunMigrations(db *sql.DB) error {
-	entries, err := migFS.ReadDir("migrations")
+	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		return err
 	}
 
-	// Run in filename order: 0001_..., 0002_...
-	names := make([]string, 0, len(entries))
+	var files []string
 	for _, e := range entries {
 		if !e.IsDir() {
-			names = append(names, e.Name())
+			files = append(files, e.Name())
 		}
 	}
-	sort.Strings(names)
+	sort.Strings(files)
 
-	log.Println("running migrations")
-	for _, name := range names {
-		sqlBytes, err := migFS.ReadFile("migrations/" + name)
+	for _, name := range files {
+		log.Printf("migration: %s", name)
+		sqlBytes, err := migrationsFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return err
 		}
@@ -35,6 +34,6 @@ func RunMigrations(db *sql.DB) error {
 			return err
 		}
 	}
-	log.Println("migrations complete")
+
 	return nil
 }

@@ -39,5 +39,19 @@ func main() {
 	_ = db.QueryRow(`SELECT COUNT(*) FROM agents;`).Scan(&n)
 	fmt.Println("Agents:", n)
 
+	var inv int
+	err = db.QueryRow(`SELECT COUNT(*) FROM agent_inventory_snapshots;`).Scan(&inv)
+	if err != nil {
+		fmt.Println("Inventory snapshots: ERROR ->", err)
+	} else {
+		fmt.Println("Inventory snapshots:", inv)
+	}
+	var facts int
+	err = db.QueryRow(`SELECT COUNT(*) FROM agent_facts;`).Scan(&facts)
+	if err != nil {
+		fmt.Println("Agent facts: ERROR ->", err)
+	} else {
+		fmt.Println("Agent facts:", facts)
+	}
 	_ = sql.ErrNoRows // keeps sql imported if your IDE nags
 }

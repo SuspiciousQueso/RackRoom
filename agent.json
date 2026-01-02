@@ -1,13 +1,13 @@
 {
-    "server_url":  "http://localhost:8085",
-    "enroll_token":  "",
-    "agent_id":  "",
-    "private_key_path":  "C:\\ProgramData\\RackRoom\\agent.key",
-    "heartbeat_seconds":  10,
-    "poll_seconds":  3,
-    "inventory_seconds":  3600,
-    "tags":  [
-                 "lab",
-                 "dev"
-             ]
+  "server_url": "http://localhost:8085",
+  "enroll_token": "",
+  "agent_id": "01a0df23-8d30-4957-ba9a-4c2547c56149",
+  "private_key_path": "C:\\ProgramData\\RackRoom\\agent.key",
+  "heartbeat_seconds": 10,
+  "poll_seconds": 3,
+  "inventory_seconds": 30,
+  "tags": [
+    "lab",
+    "dev"
+  ]
 }
