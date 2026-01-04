@@ -57,10 +57,10 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/enroll", api.Enroll)
 	// admin (v0 – no auth yet)
-	mux.HandleFunc("/v1/admin/agents", api.AdminListAgents)
-	mux.HandleFunc("/v1/admin/agents/facts", api.AdminAgentsFacts) // must be before prefix
-	mux.HandleFunc("/v1/admin/agents/", api.AdminLatestInventory)  // prefix last
-	mux.HandleFunc("/debug/sql", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/admin/agents", api.RequireServiceKey(api.AdminListAgents))
+	mux.HandleFunc("/v1/admin/agents/facts", api.RequireServiceKey(api.AdminAgentsFacts))
+	mux.HandleFunc("/v1/admin/agents/", api.RequireServiceKey(api.AdminLatestInventory))
+	mux.HandleFunc("/debug/sql", api.RequireServiceKey(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", 405)
 			return
@@ -76,7 +76,7 @@ func main() {
 		}
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok"))
-	})
+	}))
 	// Signed endpoints
 	mux.HandleFunc("/v1/heartbeat", api.RequireAgentAuth(api.Heartbeat))
 	mux.HandleFunc("/v1/job_result", api.RequireAgentAuth(api.JobResult))
